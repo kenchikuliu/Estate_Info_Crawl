@@ -60,10 +60,10 @@ pip install -r requirements.txt
 python main.py --spider jd
 ```
 程序会自动：
-1. 创建Chrome用户数据目录
+1. 启动Chrome浏览器
 2. 打开京东法拍网站
 3. 提示您手动登录
-4. 登录成功后自动保存登录信息
+4. 登录成功后继续爬取
 
 程序会自动：
 1. 检测登录状态
@@ -93,7 +93,7 @@ python main.py --spider jd --jd-province gd --jd-city sz --jd-resume-from-archiv
 
 #### 支持的省份代码：
 - `gd` - 广东省
-- `zj` - 浙江省  
+- `zj` - 浙江省
 - `bj` - 北京市
 - `sh` - 上海市
 - `sc` - 四川省
@@ -182,8 +182,8 @@ python main.py --show-districts --spider xx
 ### 京东法拍房参数
 | 参数 | 说明 | 示例 |
 |------|------|------|
-| `--jd-province` | 省份代码 | `gd`(广东)、`zj`(浙江)、`bj`(北京)、`sh`(上海)、`sc`(四川)、`hb`(湖北) |
-| `--jd-city` | 城市代码 | `sz`(深圳)、`hz`(杭州)、`cd`(成都)、`wh`(武汉) |
+| `--jd-province` | 省份代码，默认读取 `config.py` 中的 `default_province` | `gd`(广东)、`zj`(浙江)、`bj`(北京)、`sh`(上海)、`sc`(四川)、`hb`(湖北) |
+| `--jd-city` | 城市代码；省份支持默认城市时可省略 | `sz`(深圳)、`hz`(杭州)、`cd`(成都)、`wh`(武汉) |
 | `--jd-start-page` | 开始页码 | `1` |
 | `--jd-max-pages` | 最大页数 | `10` |
 | `--jd-cutoff-time` | 截止时间 | `"2024-01-01 00:00:00"` |
@@ -217,7 +217,7 @@ python main.py --show-districts --spider xx
 ## 断点续传功能详解
 
 ### 工作原理
-1. **自动扫描存档**：程序启动时自动扫描 `/output` 目录下的所有 `京东法拍房_数据_错误保存.xlsx` 文件
+1. **自动扫描存档**：程序启动时自动扫描 `/output` 目录下所有 `京东法拍房_数据_错误保存*.xlsx` 文件，并选择最新文件
 2. **读取最后记录**：获取文件中最后一条记录的"资产名称"
 3. **定位续爬点**：在爬取过程中跳过所有记录，直到找到匹配的资产名称
 4. **开始续爬**：从匹配记录的下一条开始正式爬取新数据
@@ -237,7 +237,7 @@ python main.py --spider jd --jd-province gd --jd-max-pages 20 --jd-resume-from-a
 ```
 python main.py --spider jd --jd-province sc --jd-city cd --jd-start-page 140 --jd-max-pages 999 --jd-cutoff-time "2017-01-01 00:00:00"
 ### 注意事项
-- 存档文件必须位于 `/output` 目录下名称必须为“京东法拍房_数据_错误保存.xlsx”
+- 存档文件必须位于 `/output` 目录下，名称以 `京东法拍房_数据_错误保存` 开头并以 `.xlsx` 结尾
 - 程序会显示详细的日志信息，包括跳过的记录和找到的续爬点
 
 ## 注意事项
@@ -252,7 +252,7 @@ python main.py --spider jd --jd-province sc --jd-city cd --jd-start-page 140 --j
      - 当发现拍卖结束时间早于截止时间时，爬虫会停止并保存已收集的数据
      - 该功能可用于只爬取最近的拍卖数据，提高效率
    - **断点续传功能**：
-     - 自动读取 `/output` 目录下最新的 `京东法拍房_数据_错误保存.xlsx` 文件
+     - 自动读取 `/output` 目录下最新的 `京东法拍房_数据_错误保存*.xlsx` 文件
      - 获取最后一条记录的"资产名称"
      - 从该记录的下一条开始继续爬取
      - 避免重复爬取已有数据，提高爬取效率
@@ -286,4 +286,4 @@ python main.py --spider jd --jd-province sc --jd-city cd --jd-start-page 140 --j
 
 ## 许可证
 
-本项目仅供学习和研究使用，请遵守相关网站的使用条款。 
+本项目仅供学习和研究使用，请遵守相关网站的使用条款。
