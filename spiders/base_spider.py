@@ -7,7 +7,6 @@ from selenium import webdriver
 from typing import List, Dict, Any, Optional
 import logging
 from utils.logger import setup_logger
-from utils.browser import BrowserManager
 from utils.data_storage import DataStorage
 
 class BaseSpider(ABC):
@@ -32,7 +31,6 @@ class BaseSpider(ABC):
         """
         try:
             self.logger.info(f"开始运行 {self.spider_name}")
-            self.setup_driver()
             self.run()
             self.save_data()
             self.logger.info(f"{self.spider_name} 运行完成")
@@ -48,6 +46,8 @@ class BaseSpider(ABC):
         """
         设置浏览器驱动
         """
+        from utils.browser import BrowserManager
+
         self.driver = BrowserManager.create_normal_driver()
         self.logger.info("浏览器驱动创建成功")
     
@@ -63,7 +63,7 @@ class BaseSpider(ABC):
         保存数据
         """
         if self.data:
-            filename = f"{self.spider_name}_数据.xlsx"
+            filename = self.get_output_filename()
             self.data_storage.save_to_excel(self.data, filename)
             self.logger.info(f"数据已保存，共 {len(self.data)} 条记录")
         else:
@@ -77,7 +77,7 @@ class BaseSpider(ABC):
             # 使用带时间戳的文件名，避免覆盖正常保存的数据
             import datetime
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"{self.spider_name}_数据_错误保存_{timestamp}.xlsx"
+            filename = self.get_error_output_filename(timestamp)
             
             try:
                 self.data_storage.save_to_excel(self.data, filename)
@@ -93,8 +93,16 @@ class BaseSpider(ABC):
         清理资源
         """
         if self.driver:
+            from utils.browser import BrowserManager
+
             BrowserManager.close_driver(self.driver)
             self.logger.info("浏览器驱动已关闭")
+
+    def get_output_filename(self) -> str:
+        return f"{self.spider_name}_数据.xlsx"
+
+    def get_error_output_filename(self, timestamp: str) -> str:
+        return f"{self.spider_name}_数据_错误保存_{timestamp}.xlsx"
     
     def add_data(self, item: Dict[str, Any]) -> None:
         """
@@ -112,4 +120,4 @@ class BaseSpider(ABC):
         Returns:
             List[Dict[str, Any]]: 数据列表
         """
-        return self.data.copy() 
+        return self.data.copy()

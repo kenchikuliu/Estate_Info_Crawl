@@ -214,6 +214,72 @@ python main.py --show-districts --spider xx
 - 附件和图片：`output/京东法拍/资产名称/`
 ![法拍房详细数据](images/保存的数据详细内容.jpg)
 
+## 京东法拍字段采集规则
+
+- 周边距离字段（交通、教育、医疗、购物、公园等）不是京东页面原始字段，应通过标的地址解析经纬度后，结合外部地图/POI 数据计算最近距离，并在结果中保留经纬度来源。
+- 价格字段需要区分 `起拍价`、`当前价`、`成交价/获拍价`。已成交房源应优先采集详情页成交价或获拍价，不能将起拍价或列表页当前价直接当作成交价。
+- 金融服务字段如页面展示，应单独采集，包括是否有金融服务、金融机构、最高可贷比例、参考利率、贷款期限、还款/月供信息和金融服务原文。
+- 已成交房源需要采集成交状态和成交时间。若页面没有单独成交时间字段，可在状态为已成交时使用详情页结束时间作为成交时间；流拍、变卖等状态需单独保留。
+
+## 阿里法拍字段采集规则
+
+- 当前稳定全量链路优先跑 `sf.taobao.com` 列表索引层。列表层可稳定获取 `起拍价`、`当前价`、`成交状态`、`成交时间/结束时间`、`是否支持贷款` 等基础字段。
+- `竣工时间`、`购买时间`、`层数`、`建筑面积`、`土地性质`、`土地用途`、`权证情况`、`标的所有人` 这类字段不属于列表层，通常位于详情页公告、调查表或附件中。当前公开爬虫链路不能把这些字段视为“必然可得”。
+- 阿里官方开放平台存在 `taobao.auction.zc.project.notice.detail` 等详情/公告接口，但这条路径需要签名接入；在未接入签名能力前，详情字段仍以页面公开可抓取结果为准。
+- 阿里列表层全量任务会遇到风控或登录页回包，典型特征是返回页缺少 `sf-item-list-data`。这类异常需要重试并视为任务中断风险，不能默认按正常空结果处理。
+
+### 阿里法拍运行示例
+
+```bash
+python main.py --spider ali --ali-province-key gd --ali-cities all --ali-categories all
+python main.py --spider ali --ali-province-key gd --ali-max-pages-per-partition 1
+python main.py --spider ali --spider ali --ali-with-public-bid-detail
+```
+
+### 阿里详情与周边回填
+
+阿里全量索引产物只代表列表层完成；如需标的物介绍、权证情况、建筑面积、所在楼层、附件索引、出价次数等详情字段，优先运行公开 `detail-ext.taobao.com` 接口回填。该链路不打开浏览器，支持 JSONL 断点续跑：
+
+```bash
+python scripts/ali_sf_api_detail_backfill.py --input output/ali_sf_gd_full_h5_20260611/阿里法拍房_广东_全量索引.xlsx --output output/ali_sf_gd_full_h5_20260611/阿里法拍房_广东_详情回填_API.xlsx --workers 6 --save-every 500 --no-export
+```
+
+小批量验证可加 `--limit 20 --no-resume`。全量抓取完成后，或中途需要用已有 JSONL 重建 Excel：
+
+```bash
+python scripts/ali_sf_api_detail_backfill.py --input output/ali_sf_gd_full_h5_20260611/阿里法拍房_广东_全量索引.xlsx --export-only
+```
+
+查看全量回填进度：
+
+```bash
+type output\ali_sf_gd_full_h5_20260611\阿里法拍房_广东_详情回填_API.checkpoint.json
+tail -n 20 logs/ali_sf_api_detail_full_stream_*.log
+```
+
+`--export-only` 使用流式合并写 Excel，不需要先把 28 万行索引表整体读入内存。
+
+如果部分标的的介绍文本为空但有 `.doc/.docx/.xls/.pdf` 附件，可先跑附件正文回填，再用合并后的 JSONL 导出：
+
+```bash
+python scripts/ali_sf_attachment_text_backfill.py --detail-jsonl output/ali_sf_gd_full_h5_20260611/阿里法拍房_广东_详情回填_API.jsonl --output-jsonl output/ali_sf_gd_full_h5_20260611/阿里法拍房_广东_附件正文回填_API.jsonl --combined-jsonl output/ali_sf_gd_full_h5_20260611/阿里法拍房_广东_详情回填_API_含附件正文.jsonl --empty-desc-only --workers 3 --attachment-limit 2
+python scripts/ali_sf_api_detail_backfill.py --input output/ali_sf_gd_full_h5_20260611/阿里法拍房_广东_全量索引.xlsx --jsonl-output output/ali_sf_gd_full_h5_20260611/阿里法拍房_广东_详情回填_API_含附件正文.jsonl --output output/ali_sf_gd_full_h5_20260611/阿里法拍房_广东_详情回填_API.xlsx --export-only --include-unfinished-index
+```
+
+`scripts/ali_sf_api_detail_supervise.py` 会自动串起 API 断点续跑、附件正文回填、流式 Excel 导出和验证报告。
+
+浏览器详情回填保留为兜底方案，适合 API 无法覆盖的竞买公告、须知、页面坐标或需要下载附件正文的少量标的：
+
+```bash
+python scripts/ali_sf_detail_backfill.py --input output/ali_sf_gd_full_h5_20260611/阿里法拍房_广东_全量索引.xlsx --output output/ali_sf_gd_full_h5_20260611/阿里法拍房_广东_详情回填.xlsx
+```
+
+浏览器链路会逐条打开 `sf-item.taobao.com`，可能被淘宝登录或滑块验证打断，适合断点小批量运行。周边字段可基于索引里的经纬度单独回填：
+
+```bash
+python scripts/poi_distance_backfill.py --input output/ali_sf_gd_full_h5_20260611/阿里法拍房_广东_全量索引.xlsx --output output/ali_sf_gd_full_h5_20260611/阿里法拍房_广东_全量索引_含周边.xlsx
+```
+
 ## 断点续传功能详解
 
 ### 工作原理
