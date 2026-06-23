@@ -142,8 +142,6 @@ DETAIL_COLUMNS = [
     "房屋类型",
     "所在层",
     "总层数",
-    "竣工时间",
-    "购买时间",
     "土地性质",
     "土地用途",
     "使用期限",
@@ -157,12 +155,16 @@ DETAIL_COLUMNS = [
     "权利限制状况及抵押状况",
     "房屋权属状况",
     "土地权属状况",
+    "标的物介绍文本",
+    "竞买公告文本",
+    "附件抓取时间",
+    "附件抓取状态",
+    "附件抓取错误",
     "附件数量",
     "附件名称",
     "附件链接",
     "附件ID",
     "附件索引原文",
-    "标的物介绍文本",
 ]
 
 thread_local = threading.local()
@@ -546,9 +548,11 @@ def fetch_detail(
 
     owner = first_non_empty(desc_fields.get("被执行人"), base_row.get("标的所有人"), base_row.get("被执行人"))
     title = first_non_empty(desc_fields.get("标的物名称"), base_row.get("标题"), base_row.get("标的名称"))
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    attachment_errors = [error for error in errors if str(error).startswith("attachments:")]
     row: Dict[str, Any] = {
         "标的物ID": item_id,
-        "详情抓取时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "详情抓取时间": now,
         "详情抓取状态": "成功" if not errors else ("部分成功" if desc_text or attachments or bid_summary else "失败"),
         "详情抓取错误": " | ".join(errors),
         "详情页URL": f"https://sf-item.taobao.com/sf_item/{item_id}.htm",
@@ -573,8 +577,6 @@ def fetch_detail(
         "房屋类型": desc_fields.get("房屋类型", ""),
         "所在层": desc_fields.get("所在层", ""),
         "总层数": desc_fields.get("总层数", ""),
-        "竣工时间": desc_fields.get("竣工时间", ""),
-        "购买时间": desc_fields.get("购买时间", ""),
         "土地性质": desc_fields.get("土地性质", ""),
         "土地用途": desc_fields.get("土地用途", ""),
         "使用期限": desc_fields.get("使用期限", ""),
@@ -588,12 +590,16 @@ def fetch_detail(
         "权利限制状况及抵押状况": desc_fields.get("权利限制状况及抵押状况", ""),
         "房屋权属状况": desc_fields.get("房屋权属状况", ""),
         "土地权属状况": desc_fields.get("土地权属状况", ""),
+        "标的物介绍文本": truncate_text(desc_text, raw_text_limit),
+        "竞买公告文本": "",
+        "附件抓取时间": now if include_attachments else "",
+        "附件抓取状态": ("失败" if attachment_errors else "成功") if include_attachments else "",
+        "附件抓取错误": " | ".join(attachment_errors),
         "附件数量": len(attachments),
         "附件名称": join_unique(item.get("title") for item in attachments),
         "附件链接": join_unique(item.get("url") for item in attachments),
         "附件ID": join_unique(item.get("id") for item in attachments),
         "附件索引原文": dump_json(attachments),
-        "标的物介绍文本": truncate_text(desc_text, raw_text_limit),
     }
     row.update(bid_summary)
     return row

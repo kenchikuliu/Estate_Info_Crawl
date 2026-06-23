@@ -86,8 +86,6 @@ DETAIL_COLUMNS = [
     "房屋类型",
     "所在层",
     "总层数",
-    "竣工时间",
-    "购买时间",
     "土地性质",
     "土地用途",
     "使用期限",
@@ -101,12 +99,15 @@ DETAIL_COLUMNS = [
     "权利限制状况及抵押状况",
     "房屋权属状况",
     "土地权属状况",
+    "标的物介绍文本",
+    "竞买公告文本",
+    "附件抓取时间",
+    "附件抓取状态",
+    "附件抓取错误",
     "附件数量",
     "附件名称",
     "附件链接",
     "附件索引原文",
-    "标的物介绍文本",
-    "竞买公告文本",
 ]
 
 thread_local = threading.local()
@@ -337,11 +338,20 @@ def summarize_finance(banks: Sequence[Dict[str, Any]]) -> Dict[str, str]:
     }
 
 
-def summarize_attachments(attachments: Sequence[Dict[str, Any]]) -> Dict[str, str]:
+def summarize_attachments(
+    attachments: Sequence[Dict[str, Any]],
+    include_attachments: bool,
+    fetched_at: str,
+    errors: Sequence[str],
+) -> Dict[str, str]:
     attachments = [item for item in attachments if isinstance(item, dict)]
     names = join_unique(item.get("attachmentName") for item in attachments)
     urls = join_unique(normalize_url(item.get("attachmentAddress")) for item in attachments)
+    attachment_errors = [error for error in errors if str(error).startswith("attachments:")]
     return {
+        "附件抓取时间": fetched_at if include_attachments else "",
+        "附件抓取状态": ("失败" if attachment_errors else "成功") if include_attachments else "",
+        "附件抓取错误": " | ".join(attachment_errors),
         "附件数量": len(attachments),
         "附件名称": names,
         "附件链接": urls,
@@ -492,7 +502,7 @@ def fetch_detail(
     lat = first_non_empty(basic.get("lat"), basic.get("latitude"))
     lng = first_non_empty(basic.get("lng"), basic.get("longitude"))
     finance_summary = summarize_finance(banks)
-    attachment_summary = summarize_attachments(attachments)
+    attachment_summary = summarize_attachments(attachments, include_attachments, now, errors)
     title = first_non_empty(basic.get("title"), basic.get("productName"), realtime.get("title"))
     owner = description_fields.get("被执行人", "")
 
@@ -539,8 +549,6 @@ def fetch_detail(
         "房屋类型": description_fields.get("房屋类型", ""),
         "所在层": description_fields.get("所在层", ""),
         "总层数": description_fields.get("总层数", ""),
-        "竣工时间": description_fields.get("竣工时间", ""),
-        "购买时间": description_fields.get("购买时间", ""),
         "土地性质": description_fields.get("土地性质", ""),
         "土地用途": description_fields.get("土地用途", ""),
         "使用期限": description_fields.get("使用期限", ""),
@@ -554,9 +562,9 @@ def fetch_detail(
         "权利限制状况及抵押状况": description_fields.get("权利限制状况及抵押状况", ""),
         "房屋权属状况": description_fields.get("房屋权属状况", ""),
         "土地权属状况": description_fields.get("土地权属状况", ""),
-        **attachment_summary,
         "标的物介绍文本": truncate_text(description_text, raw_text_limit),
         "竞买公告文本": truncate_text(notice_text, raw_text_limit),
+        **attachment_summary,
     }
     return row
 

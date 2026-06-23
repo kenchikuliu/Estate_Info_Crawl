@@ -58,6 +58,21 @@ PROVINCE_PRESETS: Dict[str, Dict[str, Any]] = {
         "province_label": "北京",
         "cities": [("", "北京市")],
     },
+    "sh": {
+        "province_id": "2",
+        "province_label": "上海",
+        "cities": [("", "上海市")],
+    },
+    "zj": {
+        "province_id": "15",
+        "province_label": "浙江",
+        "cities": [("", "浙江省")],
+    },
+    "hb": {
+        "province_id": "17",
+        "province_label": "湖北",
+        "cities": [("", "湖北省")],
+    },
 }
 
 
