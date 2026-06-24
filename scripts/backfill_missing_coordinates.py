@@ -135,6 +135,7 @@ def backfill_coordinates(
     report_path: Path,
     cache_path: Path,
     limit: int,
+    max_new_geocodes: int,
     sleep_seconds: float,
     timeout: int,
 ) -> Dict[str, Any]:
@@ -176,7 +177,9 @@ def backfill_coordinates(
         for col_index, header in enumerate(output_headers):
             worksheet.write(0, col_index, header)
 
-        total = jd_rows = missing_coords = candidates = filled = failed = skipped_by_limit = 0
+        total = jd_rows = missing_coords = candidates = filled = failed = 0
+        skipped_by_row_limit = skipped_by_new_geocode_limit = 0
+        cache_hits = cache_failures = new_geocode_requests = 0
         samples: List[Dict[str, Any]] = []
 
         for output_row_index, values in enumerate(rows_iter, start=1):
@@ -193,14 +196,25 @@ def backfill_coordinates(
                     if address:
                         candidates += 1
                         if limit and candidates > limit:
-                            skipped_by_limit += 1
+                            skipped_by_row_limit += 1
                         else:
+                            skipped_for_new_limit = False
                             geocoded = cache.get(address)
                             if geocoded is None:
-                                geocoded = geocode_address(address, timeout=timeout)
-                                cache[address] = geocoded
-                                if sleep_seconds > 0:
-                                    time.sleep(sleep_seconds)
+                                skipped_for_new_limit = bool(max_new_geocodes and new_geocode_requests >= max_new_geocodes)
+                                if skipped_for_new_limit:
+                                    skipped_by_new_geocode_limit += 1
+                                    geocoded = {}
+                                else:
+                                    geocoded = geocode_address(address, timeout=timeout)
+                                    cache[address] = geocoded
+                                    new_geocode_requests += 1
+                                    if sleep_seconds > 0:
+                                        time.sleep(sleep_seconds)
+                            elif isinstance(geocoded, dict) and geocoded.get("经度") and geocoded.get("纬度"):
+                                cache_hits += 1
+                            else:
+                                cache_failures += 1
                             lng = geocoded.get("经度", "") if isinstance(geocoded, dict) else ""
                             lat = geocoded.get("纬度", "") if isinstance(geocoded, dict) else ""
                             if lng and lat:
@@ -223,7 +237,8 @@ def backfill_coordinates(
                                     )
                             else:
                                 row["坐标补全状态"] = "失败"
-                                failed += 1
+                                if not skipped_for_new_limit:
+                                    failed += 1
 
             for col_index, header in enumerate(output_headers):
                 worksheet.write(output_row_index, col_index, row.get(header, ""))
@@ -245,7 +260,11 @@ def backfill_coordinates(
         "geocode_candidates": candidates,
         "filled_coords": filled,
         "failed_geocodes": failed,
-        "skipped_by_limit": skipped_by_limit,
+        "cache_hits": cache_hits,
+        "cache_failures": cache_failures,
+        "new_geocode_requests": new_geocode_requests,
+        "skipped_by_row_limit": skipped_by_row_limit,
+        "skipped_by_new_geocode_limit": skipped_by_new_geocode_limit,
         "samples": samples,
     }
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -259,6 +278,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--report", required=True)
     parser.add_argument("--cache", required=True)
     parser.add_argument("--limit", type=int, default=0, help="0 means no limit.")
+    parser.add_argument("--max-new-geocodes", type=int, default=0, help="0 means no limit. Cached coordinates are still reused.")
     parser.add_argument("--sleep", type=float, default=0.2)
     parser.add_argument("--timeout", type=int, default=20)
     return parser.parse_args()
@@ -273,6 +293,7 @@ def main() -> None:
         report_path=Path(args.report),
         cache_path=Path(args.cache),
         limit=args.limit,
+        max_new_geocodes=args.max_new_geocodes,
         sleep_seconds=args.sleep,
         timeout=args.timeout,
     )
