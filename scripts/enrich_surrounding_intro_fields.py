@@ -12,6 +12,7 @@ import argparse
 import html
 import json
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
@@ -34,6 +35,24 @@ ADDED_COLUMNS = [
     "整理依据字段",
     "整理状态",
 ]
+
+
+def configure_output_encoding() -> None:
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+            except Exception:
+                pass
+
+
+def print_report(report: Dict[str, Any]) -> None:
+    text = json.dumps(report, ensure_ascii=False, indent=2)
+    try:
+        print(text, flush=True)
+    except UnicodeEncodeError:
+        print(text.encode("utf-8", errors="backslashreplace").decode("utf-8"), flush=True)
 
 SECTION_HEADINGS = [
     "标的物估值",
@@ -346,6 +365,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    configure_output_encoding()
     args = parse_args()
     report = enrich_excel(
         Path(args.input),
@@ -353,7 +373,7 @@ def main() -> None:
         Path(args.report),
         Path(args.tmpdir) if args.tmpdir else None,
     )
-    print(json.dumps(report, ensure_ascii=False, indent=2), flush=True)
+    print_report(report)
 
 
 if __name__ == "__main__":

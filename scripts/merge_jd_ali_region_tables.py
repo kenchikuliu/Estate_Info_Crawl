@@ -13,6 +13,7 @@ import argparse
 import html
 import json
 import re
+import sys
 import unicodedata
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +26,24 @@ from openpyxl import load_workbook
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 MISSING = {"", "none", "null", "nan"}
+
+
+def configure_output_encoding() -> None:
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+            except Exception:
+                pass
+
+
+def print_report(report: Dict[str, Any]) -> None:
+    text = json.dumps(report, ensure_ascii=False, indent=2)
+    try:
+        print(text, flush=True)
+    except UnicodeEncodeError:
+        print(text.encode("utf-8", errors="backslashreplace").decode("utf-8"), flush=True)
 
 ID_COL = "标的物ID"
 LINK_COL = "链接"
@@ -410,6 +429,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    configure_output_encoding()
     args = parse_args()
     report = merge_region(
         Path(args.jd),
@@ -417,7 +437,7 @@ def main() -> None:
         Path(args.output),
         Path(args.report),
     )
-    print(json.dumps(report, ensure_ascii=False, indent=2), flush=True)
+    print_report(report)
 
 
 if __name__ == "__main__":
