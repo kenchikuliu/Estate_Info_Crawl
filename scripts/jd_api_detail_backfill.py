@@ -31,6 +31,7 @@ from utils.jd_detail_parser import (  # noqa: E402
     extract_labeled_fields,
     extract_region_fields,
     extract_rights_status_text,
+    geocode_address,
     parse_intro_sections,
     parse_survey_table_rows,
     postprocess_structured_fields,
@@ -86,6 +87,7 @@ DETAIL_COLUMNS = [
     "房屋类型",
     "所在层",
     "总层数",
+    "竣工时间",
     "土地性质",
     "土地用途",
     "使用期限",
@@ -409,6 +411,8 @@ def fetch_detail(
     include_notice: bool,
     include_attachments: bool,
     include_description: bool,
+    geocode_missing_coordinates: bool,
+    geocode_timeout: int,
     raw_text_limit: int,
     retries: int,
     timeout: int,
@@ -499,11 +503,24 @@ def fetch_detail(
     deal_price = first_non_empty(bid.get("price"), current_price) if sold else ""
     deal_time = first_non_empty(ts_to_text(bid.get("bidTime")), ts_to_text(end_time)) if sold else ""
 
+    address_info = address_fields(basic)
+    title = first_non_empty(basic.get("title"), basic.get("productName"), realtime.get("title"))
     lat = first_non_empty(basic.get("lat"), basic.get("latitude"))
     lng = first_non_empty(basic.get("lng"), basic.get("longitude"))
+    coord_source = "京东详情API" if lng and lat else ""
+    if geocode_missing_coordinates and (not lng or not lat):
+        geocoded = geocode_address(first_non_empty(address_info.get("详情地址"), title), timeout=geocode_timeout)
+        geo_lng = geocoded.get("经度", "")
+        geo_lat = geocoded.get("纬度", "")
+        if geo_lng and geo_lat:
+            lng = geo_lng
+            lat = geo_lat
+            coord_source = "ArcGIS地址地理编码"
+            address_info["详情省"] = address_info.get("详情省") or geocoded.get("省", "")
+            address_info["详情市"] = address_info.get("详情市") or geocoded.get("市", "")
+            address_info["详情区县"] = address_info.get("详情区县") or geocoded.get("区县", "")
     finance_summary = summarize_finance(banks)
     attachment_summary = summarize_attachments(attachments, include_attachments, now, errors)
-    title = first_non_empty(basic.get("title"), basic.get("productName"), realtime.get("title"))
     owner = description_fields.get("被执行人", "")
 
     row: Dict[str, Any] = {
@@ -518,10 +535,10 @@ def fetch_detail(
         "权证情况": description_fields.get("权证情况", ""),
         "标的所有人": owner,
         "被执行人/标的所有人": owner,
-        **address_fields(basic),
+        **address_info,
         "经度": lng,
         "纬度": lat,
-        "经纬度来源": "京东详情API" if lng and lat else "",
+        "经纬度来源": coord_source,
         "法院/处置机构": first_non_empty(
             basic.get("courtName"),
             basic.get("courtVendorName"),
@@ -549,6 +566,7 @@ def fetch_detail(
         "房屋类型": description_fields.get("房屋类型", ""),
         "所在层": description_fields.get("所在层", ""),
         "总层数": description_fields.get("总层数", ""),
+        "竣工时间": description_fields.get("竣工时间", ""),
         "土地性质": description_fields.get("土地性质", ""),
         "土地用途": description_fields.get("土地用途", ""),
         "使用期限": description_fields.get("使用期限", ""),
@@ -699,6 +717,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-description", action="store_true")
     parser.add_argument("--no-attachments", action="store_true")
     parser.add_argument("--with-notice", action="store_true", help="Also fetch auction notice text. Slower.")
+    parser.add_argument("--geocode-missing-coordinates", action="store_true", help="Use address geocoding when JD detail API has no coordinates.")
+    parser.add_argument("--geocode-timeout", type=int, default=20)
     parser.add_argument("--include-unfinished-index", action="store_true", help="Excel output keeps all index rows.")
     parser.add_argument("--export-only", action="store_true", help="Only rebuild Excel from existing JSONL.")
     return parser.parse_args()
@@ -766,6 +786,8 @@ def main() -> None:
                 args.with_notice,
                 not args.no_attachments,
                 not args.no_description,
+                args.geocode_missing_coordinates,
+                args.geocode_timeout,
                 args.raw_text_limit,
                 args.retries,
                 args.timeout,

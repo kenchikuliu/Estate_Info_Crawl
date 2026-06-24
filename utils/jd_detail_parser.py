@@ -76,6 +76,8 @@ SURVEY_LABEL_MAPPING = {
     "提供的文件": "提供文件",
     "成交后提供的文件": "提供文件",
     "建筑面积": "建筑面积",
+    "建筑总面积": "建筑面积",
+    "建筑面积合计": "建筑面积",
     "面积": "建筑面积",
     "房屋类型": "房屋类型",
     "性质": "房屋类型",
@@ -85,13 +87,19 @@ SURVEY_LABEL_MAPPING = {
     "规划用途": "房屋用途",
     "使用性质": "房屋用途",
     "总层数": "总层数",
+    "总楼层": "总层数",
+    "建筑物总层数": "总层数",
+    "建筑物总高": "总层数",
     "所在楼层": "所在层",
     "所在层": "所在层",
     "楼层": "所在层",
+    "房屋楼层": "所在层",
     "竣工时间": "竣工时间",
     "竣工日期": "竣工时间",
+    "竣工时期": "竣工时间",
     "建成时间": "竣工时间",
     "建成年代": "竣工时间",
+    "建成年月": "竣工时间",
     "购买时间": "购买时间",
     "购买日期": "购买时间",
     "购置时间": "购买时间",
@@ -404,6 +412,72 @@ def extract_line_labeled_fields(text: str) -> Dict[str, str]:
     return result
 
 
+def _compact_text(text: str) -> str:
+    return re.sub(r"\s+", " ", clean_text(text)).strip()
+
+
+def extract_inline_structured_fields(text: str) -> Dict[str, str]:
+    compact = _compact_text(text)
+    if not compact:
+        return {}
+
+    result: Dict[str, str] = {}
+    number = r"[0-9]+(?:\.[0-9]+)?"
+    cn_number = r"[0-9一二三四五六七八九十百]+"
+
+    area_match = re.search(
+        rf"(?<!地下)(?<!公摊)(?<!分摊)(?:建筑总面积|建筑面积合计|共计建筑面积|建筑面积)"
+        rf"(?:合计|约|为|共计|计)?\s*[:：]?\s*({number}\s*(?:平方米|平米|㎡)?)",
+        compact,
+    )
+    if area_match:
+        result["建筑面积"] = area_match.group(1)
+
+    floor_match = re.search(
+        rf"(?:所在楼层|所在层|房屋楼层|楼层)"
+        rf"(?:为|是)?\s*[:：]?\s*(第?\s*{cn_number}(?:\s*[-至到]\s*{cn_number})?\s*(?:层|楼|F)|[0-9]+\s*/\s*[0-9]+\s*F?)",
+        compact,
+        re.I,
+    )
+    if not floor_match:
+        floor_match = re.search(
+            rf"(?:标的|房屋|该房屋|该标的|拍卖标的)\s*(?:位于|坐落于|处于)\s*(第?\s*{cn_number}\s*(?:层|楼|F))",
+            compact,
+            re.I,
+        )
+    if not floor_match:
+        floor_match = re.search(r"(?:所在位置|楼宇位置)[^；;，,。]{0,60}?([0-9]+\s*层)", compact, re.I)
+    if floor_match:
+        result["所在层"] = floor_match.group(1)
+
+    total_floor_match = re.search(
+        rf"(?:建筑物总层数|建筑物总高|总层数|总楼层|总高|共)"
+        rf"(?:为|计)?\s*[:：]?\s*({cn_number})\s*(?:层|楼|F)",
+        compact,
+        re.I,
+    )
+    if total_floor_match:
+        result["总层数"] = total_floor_match.group(1) + "层"
+
+    if "所在层" in result and "总层数" not in result:
+        slash_match = re.search(r"([0-9]+)\s*/\s*([0-9]+)\s*F?", result["所在层"], re.I)
+        if slash_match:
+            result["总层数"] = slash_match.group(2) + "层"
+
+    built_match = re.search(
+        r"(?:竣工时间|竣工日期|竣工时期|建成时间|建成年代|建成年月)"
+        r"(?:为|是)?\s*[:：]?\s*"
+        r"([0-9]{4}\s*年?(?:\s*[0-9]{1,2}\s*月(?:\s*[0-9]{1,2}\s*日)?)?|[0-9]{4}-[0-9]{1,2}(?:-[0-9]{1,2})?)",
+        compact,
+    )
+    if not built_match:
+        built_match = re.search(r"建成于\s*([0-9]{4}\s*年?(?:\s*[0-9]{1,2}\s*月)?)", compact)
+    if built_match:
+        result["竣工时间"] = built_match.group(1)
+
+    return result
+
+
 def extract_labeled_fields(text: str) -> Dict[str, str]:
     normalized = clean_text(text)
     if not normalized:
@@ -447,7 +521,7 @@ def extract_labeled_fields(text: str) -> Dict[str, str]:
             r"(?:成交后提供的文件|提供的文件)[:：]?\s*([^\n]+)",
         ],
         "建筑面积": [
-            r"建筑面积(?:为)?[:：]?\s*([0-9]+(?:\.[0-9]+)?\s*(?:平方米|平米|㎡))",
+            r"(?:建筑总面积|建筑面积)(?:合计|约|为)?[:：]?\s*([0-9]+(?:\.[0-9]+)?\s*(?:平方米|平米|㎡))",
             r"建筑面积[:：]?\s*([^\n；;，,。]+)",
         ],
         "房屋类型": [
@@ -463,10 +537,10 @@ def extract_labeled_fields(text: str) -> Dict[str, str]:
             r"使用性质[:：]?\s*([^\n；;，,。]+)",
         ],
         "总层数": [
-            r"(?:总层数|共)\s*([0-9一二三四五六七八九十百]+层)",
+            r"(?:建筑物总层数|建筑物总高|总层数|总楼层|总高|共)\s*(?:为)?\s*([0-9一二三四五六七八九十百]+层)",
         ],
         "竣工时间": [
-            r"(?:竣工时间|竣工日期|建成时间|建成年代)[:：]?\s*([^\n；;，,。]+)",
+            r"(?:竣工时间|竣工日期|竣工时期|建成时间|建成年代|建成年月)[:：]?\s*([^\n；;，,。]+)",
             r"建成于\s*([0-9]{4}年(?:[0-9]{1,2}月)?)",
         ],
         "购买时间": [
@@ -494,7 +568,7 @@ def extract_labeled_fields(text: str) -> Dict[str, str]:
             r"土地使用年限[:：]?\s*([^\n；;。]+)",
         ],
         "所在层": [
-            r"(?:所在楼层|所在层|楼层)[:：]?\s*([^\n；;，,。]+)",
+            r"(?:所在楼层|所在层|房屋楼层|楼层)[:：]?\s*([^\n；;，,。]+)",
             r"([0-9一二三四五六七八九十]+层，共[0-9一二三四五六七八九十]+层[^\n]*)",
         ],
     }
@@ -510,6 +584,7 @@ def extract_labeled_fields(text: str) -> Dict[str, str]:
                     break
 
     result.update(extract_line_labeled_fields(normalized))
+    result.update(extract_inline_structured_fields(normalized))
     return result
 
 
@@ -522,9 +597,17 @@ def normalize_field_value(field: str, value: str) -> str:
     cleaned = re.sub(r"([第共])\s+", r"\1", cleaned)
 
     if field == "建筑面积":
-        match = re.search(r"([0-9]+(?:\.[0-9]+)?\s*(?:平方米|平米|㎡))", cleaned)
+        match = re.search(r"([0-9]+(?:\.[0-9]+)?\s*(?:平方米|平米|㎡)?)", cleaned)
         if match:
-            return match.group(1)
+            value = re.sub(r"\s+", "", match.group(1))
+            if not re.search(r"(平方米|平米|㎡)", value):
+                try:
+                    if float(value) < 10:
+                        return ""
+                except Exception:
+                    return ""
+            return value
+        return ""
     if field == "房屋用途":
         cleaned = cleaned.replace("房屋用途", "").replace("用途", "")
         cleaned = re.sub(r"^(?:及|为|用途为)\s*", "", cleaned)
@@ -542,10 +625,33 @@ def normalize_field_value(field: str, value: str) -> str:
         cleaned = cleaned.replace("房屋规划用途", "").replace("房屋用途", "")
         cleaned = re.sub(r"^(?:及|为|用途为)\s*", "", cleaned).strip()
     if field == "所在层":
-        cleaned = cleaned.replace("位于第", "")
+        cleaned = cleaned.replace("位于第", "第")
+        if cleaned in {"总层数", "总楼层", "房屋朝向", "周边配套"}:
+            return ""
+        slash_match = re.search(r"([0-9]+)\s*/\s*[0-9]+\s*F?", cleaned, re.I)
+        if slash_match:
+            return slash_match.group(1) + "层"
+        range_match = re.search(r"第?\s*([0-9一二三四五六七八九十百]+)\s*[-至到]\s*([0-9一二三四五六七八九十百]+)\s*(?:层|楼|F)", cleaned, re.I)
+        if range_match:
+            return f"{range_match.group(1)}-{range_match.group(2)}层"
+        match = re.search(r"第?\s*([0-9一二三四五六七八九十百]+)\s*(?:层|楼|F)", cleaned, re.I)
+        if match:
+            return match.group(1) + "层"
+        return ""
+    if field == "总层数":
+        if cleaned in {"所在层", "房屋楼层", "楼层"}:
+            return ""
+        slash_match = re.search(r"[0-9]+\s*/\s*([0-9]+)\s*F?", cleaned, re.I)
+        if slash_match:
+            return slash_match.group(1) + "层"
+        match = re.search(r"([0-9一二三四五六七八九十百]+)\s*(?:层|楼|F)?", cleaned, re.I)
+        if match:
+            return match.group(1) + "层"
+        return ""
     if field in {"竣工时间", "购买时间", "核准日期"}:
         cleaned = cleaned.replace("建成年代", "").replace("建成时间", "")
-        cleaned = cleaned.replace("竣工时间", "").replace("竣工日期", "")
+        cleaned = cleaned.replace("建成年月", "")
+        cleaned = cleaned.replace("竣工时间", "").replace("竣工日期", "").replace("竣工时期", "")
         cleaned = cleaned.replace("购买时间", "").replace("购买日期", "")
         cleaned = cleaned.replace("购置时间", "").replace("取得时间", "").replace("取得日期", "")
         cleaned = re.sub(r"^(?:为|于|在)\s*", "", cleaned).strip(" ：:")
@@ -649,12 +755,19 @@ def sanitize_structured_value(field: str, value: str) -> str:
             return ""
     if field == "权证情况" and len(cleaned) > 120:
         return ""
+    if field == "建筑面积":
+        if not re.search(r"[0-9]", cleaned):
+            return ""
+        if len(cleaned) > 40:
+            match = re.search(r"([0-9]+(?:\.[0-9]+)?\s*(?:平方米|平米|㎡)?)", cleaned)
+            return re.sub(r"\s+", "", match.group(1)) if match else ""
+    if field in {"所在层", "总层数"} and len(cleaned) > 20:
+        return ""
     if field in {"竣工时间", "购买时间", "核准日期"}:
         match = re.search(r"([0-9]{4}年(?:[0-9]{1,2}月(?:[0-9]{1,2}日)?)?|[0-9]{4}-[0-9]{1,2}(?:-[0-9]{1,2})?)", cleaned)
         if match:
             return match.group(1)
-        if len(cleaned) > 40:
-            return ""
+        return ""
     if field == "标的物名称":
         cleaned = re.sub(r"^、坐落\s*", "", cleaned)
     return cleaned

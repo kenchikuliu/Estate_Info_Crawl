@@ -359,14 +359,9 @@ def split_range(drange: DateRange) -> Tuple[DateRange, DateRange]:
 
 def initial_ranges(start_year: int, end_year: int) -> List[DateRange]:
     ranges: List[DateRange] = []
-    if start_year < 2020:
-        ranges.append(DateRange(date(start_year, 1, 1), date(2019, 12, 31)))
-        first_year = 2020
-    else:
-        first_year = start_year
     current_year = datetime.now().year
     annual_until = min(end_year, current_year)
-    for year in range(first_year, annual_until + 1):
+    for year in range(start_year, annual_until + 1):
         ranges.append(DateRange(date(year, 1, 1), date(year, 12, 31)))
     if end_year > annual_until:
         ranges.append(DateRange(date(annual_until + 1, 1, 1), date(end_year, 12, 31)))
