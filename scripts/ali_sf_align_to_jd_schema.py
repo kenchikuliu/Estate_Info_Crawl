@@ -339,7 +339,10 @@ def main() -> None:
         source_headers = [clean_header(value) for value in source_header_row]
 
         tmp_path = output.with_suffix(output.suffix + ".tmp.xlsx")
-        workbook = xlsxwriter.Workbook(str(tmp_path), {"strings_to_urls": False, "constant_memory": True})
+        workbook = xlsxwriter.Workbook(
+            str(tmp_path),
+            {"strings_to_urls": False, "constant_memory": True, "use_zip64": True},
+        )
         worksheet = workbook.add_worksheet("Sheet1")
         for col_index, header in enumerate(target_headers):
             worksheet.write(0, col_index, header)
