@@ -136,12 +136,14 @@ def backfill_coordinates(
     cache_path: Path,
     limit: int,
     max_new_geocodes: int,
+    cache_only: bool,
     sleep_seconds: float,
     timeout: int,
 ) -> Dict[str, Any]:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if not cache_only:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp.xlsx")
+    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp.xlsx") if not cache_only else None
     cache = load_cache(cache_path)
 
     workbook_in = load_workbook(input_path, read_only=True, data_only=True)
@@ -151,12 +153,18 @@ def backfill_coordinates(
         rows_iter = sheet.iter_rows(values_only=True)
         raw_headers = next(rows_iter, None)
         if not raw_headers:
-            headers: List[str] = []
-            workbook_out = xlsxwriter.Workbook(str(tmp_path), {"strings_to_urls": False, "constant_memory": True, "use_zip64": True})
-            workbook_out.add_worksheet("Sheet1")
-            workbook_out.close()
-            tmp_path.replace(output_path)
-            report = {"created_at": now, "input": str(input_path), "output": str(output_path), "rows": 0}
+            if not cache_only and tmp_path is not None:
+                workbook_out = xlsxwriter.Workbook(str(tmp_path), {"strings_to_urls": False, "constant_memory": True, "use_zip64": True})
+                workbook_out.add_worksheet("Sheet1")
+                workbook_out.close()
+                tmp_path.replace(output_path)
+            report = {
+                "created_at": now,
+                "input": str(input_path),
+                "output": "" if cache_only else str(output_path),
+                "cache_only": cache_only,
+                "rows": 0,
+            }
             report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
             return report
 
@@ -169,17 +177,21 @@ def backfill_coordinates(
             if field not in output_headers:
                 output_headers.append(field)
 
-        workbook_out = xlsxwriter.Workbook(
-            str(tmp_path),
-            {"strings_to_urls": False, "constant_memory": True, "use_zip64": True},
-        )
-        worksheet = workbook_out.add_worksheet("Sheet1")
-        for col_index, header in enumerate(output_headers):
-            worksheet.write(0, col_index, header)
+        workbook_out = None
+        worksheet = None
+        if not cache_only and tmp_path is not None:
+            workbook_out = xlsxwriter.Workbook(
+                str(tmp_path),
+                {"strings_to_urls": False, "constant_memory": True, "use_zip64": True},
+            )
+            worksheet = workbook_out.add_worksheet("Sheet1")
+            for col_index, header in enumerate(output_headers):
+                worksheet.write(0, col_index, header)
 
         total = jd_rows = missing_coords = candidates = filled = failed = 0
         skipped_by_row_limit = skipped_by_new_geocode_limit = 0
         cache_hits = cache_failures = new_geocode_requests = 0
+        scan_complete = True
         samples: List[Dict[str, Any]] = []
 
         for output_row_index, values in enumerate(rows_iter, start=1):
@@ -205,6 +217,9 @@ def backfill_coordinates(
                                 if skipped_for_new_limit:
                                     skipped_by_new_geocode_limit += 1
                                     geocoded = {}
+                                    if cache_only:
+                                        scan_complete = False
+                                        break
                                 else:
                                     geocoded = geocode_address(address, timeout=timeout)
                                     cache[address] = geocoded
@@ -240,11 +255,13 @@ def backfill_coordinates(
                                 if not skipped_for_new_limit:
                                     failed += 1
 
-            for col_index, header in enumerate(output_headers):
-                worksheet.write(output_row_index, col_index, row.get(header, ""))
+            if worksheet is not None:
+                for col_index, header in enumerate(output_headers):
+                    worksheet.write(output_row_index, col_index, row.get(header, ""))
 
-        workbook_out.close()
-        tmp_path.replace(output_path)
+        if workbook_out is not None and tmp_path is not None:
+            workbook_out.close()
+            tmp_path.replace(output_path)
     finally:
         workbook_in.close()
 
@@ -252,9 +269,11 @@ def backfill_coordinates(
     report = {
         "created_at": now,
         "input": str(input_path),
-        "output": str(output_path),
+        "output": "" if cache_only else str(output_path),
         "cache": str(cache_path),
+        "cache_only": cache_only,
         "rows": total,
+        "scan_complete": scan_complete,
         "jd_rows": jd_rows,
         "jd_missing_coords": missing_coords,
         "geocode_candidates": candidates,
@@ -277,6 +296,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True)
     parser.add_argument("--report", required=True)
     parser.add_argument("--cache", required=True)
+    parser.add_argument("--cache-only", action="store_true", help="Populate geocode cache without writing an output workbook.")
     parser.add_argument("--limit", type=int, default=0, help="0 means no limit.")
     parser.add_argument("--max-new-geocodes", type=int, default=0, help="0 means no limit. Cached coordinates are still reused.")
     parser.add_argument("--sleep", type=float, default=0.2)
@@ -294,6 +314,7 @@ def main() -> None:
         cache_path=Path(args.cache),
         limit=args.limit,
         max_new_geocodes=args.max_new_geocodes,
+        cache_only=args.cache_only,
         sleep_seconds=args.sleep,
         timeout=args.timeout,
     )
