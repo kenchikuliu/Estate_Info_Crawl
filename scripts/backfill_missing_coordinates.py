@@ -137,6 +137,8 @@ def backfill_coordinates(
     limit: int,
     max_new_geocodes: int,
     cache_only: bool,
+    checkpoint_interval: int,
+    skip_known_failures: bool,
     sleep_seconds: float,
     timeout: int,
 ) -> Dict[str, Any]:
@@ -146,8 +148,47 @@ def backfill_coordinates(
     tmp_path = output_path.with_suffix(output_path.suffix + ".tmp.xlsx") if not cache_only else None
     cache = load_cache(cache_path)
 
-    workbook_in = load_workbook(input_path, read_only=True, data_only=True)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    total = jd_rows = missing_coords = candidates = filled = failed = 0
+    skipped_by_row_limit = skipped_by_new_geocode_limit = skipped_known_failure = 0
+    cache_hits = cache_failures = new_geocode_requests = 0
+    scan_complete = False
+    returned_early = False
+    samples: List[Dict[str, Any]] = []
+    last_checkpoint_new_geocodes = 0
+
+    def build_report(status: str) -> Dict[str, Any]:
+        return {
+            "created_at": now,
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "status": status,
+            "input": str(input_path),
+            "output": "" if cache_only else str(output_path),
+            "cache": str(cache_path),
+            "cache_only": cache_only,
+            "rows": total,
+            "scan_complete": scan_complete,
+            "jd_rows": jd_rows,
+            "jd_missing_coords": missing_coords,
+            "geocode_candidates": candidates,
+            "filled_coords": filled,
+            "failed_geocodes": failed,
+            "cache_hits": cache_hits,
+            "cache_failures": cache_failures,
+            "new_geocode_requests": new_geocode_requests,
+            "skipped_known_failures": skipped_known_failure,
+            "skipped_by_row_limit": skipped_by_row_limit,
+            "skipped_by_new_geocode_limit": skipped_by_new_geocode_limit,
+            "checkpoint_interval": checkpoint_interval,
+            "skip_known_failures": skip_known_failures,
+            "samples": samples,
+        }
+
+    def write_checkpoint(status: str) -> None:
+        save_cache(cache_path, cache)
+        report_path.write_text(json.dumps(build_report(status), ensure_ascii=False, indent=2), encoding="utf-8")
+
+    workbook_in = load_workbook(input_path, read_only=True, data_only=True)
     try:
         sheet = workbook_in.active
         rows_iter = sheet.iter_rows(values_only=True)
@@ -160,12 +201,16 @@ def backfill_coordinates(
                 tmp_path.replace(output_path)
             report = {
                 "created_at": now,
+                "updated_at": now,
+                "status": "complete",
                 "input": str(input_path),
                 "output": "" if cache_only else str(output_path),
+                "cache": str(cache_path),
                 "cache_only": cache_only,
                 "rows": 0,
             }
             report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            returned_early = True
             return report
 
         headers = unique_headers(raw_headers)
@@ -188,11 +233,7 @@ def backfill_coordinates(
             for col_index, header in enumerate(output_headers):
                 worksheet.write(0, col_index, header)
 
-        total = jd_rows = missing_coords = candidates = filled = failed = 0
-        skipped_by_row_limit = skipped_by_new_geocode_limit = 0
-        cache_hits = cache_failures = new_geocode_requests = 0
         scan_complete = True
-        samples: List[Dict[str, Any]] = []
 
         for output_row_index, values in enumerate(rows_iter, start=1):
             total += 1
@@ -230,6 +271,14 @@ def backfill_coordinates(
                                 cache_hits += 1
                             else:
                                 cache_failures += 1
+                                if skip_known_failures:
+                                    skipped_known_failure += 1
+                                    geocoded = {}
+                                    row["坐标补全状态"] = "跳过已知失败"
+                                    if worksheet is not None:
+                                        for col_index, header in enumerate(output_headers):
+                                            worksheet.write(output_row_index, col_index, row.get(header, ""))
+                                    continue
                             lng = geocoded.get("经度", "") if isinstance(geocoded, dict) else ""
                             lat = geocoded.get("纬度", "") if isinstance(geocoded, dict) else ""
                             if lng and lat:
@@ -254,6 +303,13 @@ def backfill_coordinates(
                                 row["坐标补全状态"] = "失败"
                                 if not skipped_for_new_limit:
                                     failed += 1
+                            if (
+                                checkpoint_interval
+                                and new_geocode_requests
+                                and new_geocode_requests - last_checkpoint_new_geocodes >= checkpoint_interval
+                            ):
+                                write_checkpoint("running")
+                                last_checkpoint_new_geocodes = new_geocode_requests
 
             if worksheet is not None:
                 for col_index, header in enumerate(output_headers):
@@ -263,29 +319,11 @@ def backfill_coordinates(
             workbook_out.close()
             tmp_path.replace(output_path)
     finally:
+        if not returned_early:
+            write_checkpoint("complete" if scan_complete else "partial")
         workbook_in.close()
 
-    save_cache(cache_path, cache)
-    report = {
-        "created_at": now,
-        "input": str(input_path),
-        "output": "" if cache_only else str(output_path),
-        "cache": str(cache_path),
-        "cache_only": cache_only,
-        "rows": total,
-        "scan_complete": scan_complete,
-        "jd_rows": jd_rows,
-        "jd_missing_coords": missing_coords,
-        "geocode_candidates": candidates,
-        "filled_coords": filled,
-        "failed_geocodes": failed,
-        "cache_hits": cache_hits,
-        "cache_failures": cache_failures,
-        "new_geocode_requests": new_geocode_requests,
-        "skipped_by_row_limit": skipped_by_row_limit,
-        "skipped_by_new_geocode_limit": skipped_by_new_geocode_limit,
-        "samples": samples,
-    }
+    report = build_report("complete" if scan_complete else "partial")
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report
 
@@ -299,6 +337,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cache-only", action="store_true", help="Populate geocode cache without writing an output workbook.")
     parser.add_argument("--limit", type=int, default=0, help="0 means no limit.")
     parser.add_argument("--max-new-geocodes", type=int, default=0, help="0 means no limit. Cached coordinates are still reused.")
+    parser.add_argument("--checkpoint-interval", type=int, default=100, help="Save cache/report after this many new geocodes. 0 disables mid-run checkpoints.")
+    parser.add_argument("--skip-known-failures", action="store_true", help="Do not retry addresses already cached as geocode failures.")
     parser.add_argument("--sleep", type=float, default=0.2)
     parser.add_argument("--timeout", type=int, default=20)
     return parser.parse_args()
@@ -315,6 +355,8 @@ def main() -> None:
         limit=args.limit,
         max_new_geocodes=args.max_new_geocodes,
         cache_only=args.cache_only,
+        checkpoint_interval=args.checkpoint_interval,
+        skip_known_failures=args.skip_known_failures,
         sleep_seconds=args.sleep,
         timeout=args.timeout,
     )
